@@ -39,7 +39,10 @@ class VindiFiscalAdmin {
     public function vindi_options() {
         ob_start();
         require 'class.vind.export.php';
-        $VindiExport = new VindiExport();
+
+        if($_POST['submit']) {
+            $VindiExport = new VindiExport();
+        }
         require 'admin/export.php';
         echo ob_get_clean();
     }

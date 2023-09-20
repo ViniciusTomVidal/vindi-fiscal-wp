@@ -4,26 +4,39 @@ use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 require 'vendor/autoload.php';
-class VindiExport {
-    public function __construct() {
-        $arguments = array(
+
+class VindiExport
+{
+
+    private $arguments = [];
+
+    public function __construct()
+    {
+
+        $this->arguments = array(
             'VINDI_API_KEY' => get_option('_vindi_token'),
             'VINDI_API_URI' => 'https://app.vindi.com.br/api/v1/'
         );
-        $Invoice = new Vindi\Invoice($arguments);
-        $Bills = new Vindi\Bill($arguments);
-        $i = 1;
-        $Invoces = $Invoice->all(['query' => 'created_at>="2023-09-10 14:00:00" created_at<"2023-09-28 14:00:00"', 'per_page' => 50, 'paged'=>$i]);
+
         $items = [];
+        $Invoices = $this->import_invoices();
+        $bill_ids = [];
 
-
-        foreach ($Invoces as $i => $item) {
-            $Invoces[$i]->bill_data = $Bills->get($item->bill->id);
-        }
-        foreach ($Invoces as $item) {
-            $items[] = $this->get_data($item);
+        foreach ($Invoices as $i => $item) {
+            $bill_ids[] = $item->bill->id;
         }
 
+        $Bills = $this->import_bills($bill_ids);
+
+        $billMap = array_column($Bills, null, 'id');
+
+        foreach ($Invoices as $i => $Invoice) {
+            $billId = $Invoice->bill->id;
+            if (isset($billMap[$billId])) {
+                $Invoices[$i]->bill_data = $billMap[$billId];
+            }
+            $items[] = $this->get_data($Invoice);
+        }
 
         $spreadsheet = new PhpOffice\PhpSpreadsheet\Spreadsheet();
 
@@ -64,7 +77,7 @@ class VindiExport {
 
         foreach ($items as $k_row => $row) {
             $rowNum = $k_row + 2;
-            $row = (object) $row;
+            $row = (object)$row;
 
             if ($row->payment_method != 'Cartão de crédito') {
                 $row->due_at = "À Vista";
@@ -92,33 +105,47 @@ class VindiExport {
         $target_dir = $upload_dir['basedir'] . '/' . $subdirectory;
         wp_mkdir_p($target_dir);
 
-       $writer->save($target_dir.'/file.xlsx');
+        $writer->save($target_dir . '/file-'.explode(" ", $this->date_s($_POST['date_start']))[0].'-'.explode(" ", $this->date_s($_POST['date_end']))[0].'.xlsx');
     }
 
 
-
-    public function get_data($item) {
+    public function get_data($item)
+    {
         $fieldsInvoce = [
             'name' => $item->customer->name,
-            'email'  => $item->customer->email,
+            'email' => $item->customer->email,
             'amount' => $item->amount,
-            'status' =>  $item->status,
-            'integration_reference'=> $item->integration_reference,
-            'created_at' => $item->created_at,
-            'charged_at' => $item->updated_at,
+            'status' => $item->status,
+            'integration_reference' => $item->integration_reference,
+            'created_at' => $item->issued_at,
+            'charged_at' => null,
             'bill_status' => $item->bill_data->status,
-            'payment_method' => $item->bill_data->charges[0]->payment_method->name,
-            'payment_company'=> $item->bill_data->charges[0]->last_transaction->payment_profile->payment_company->name,
+            'payment_method' => null,
+            'payment_company' => null,
             'product_item' => $item->bill_data->bill_items[0]->product_item->product->name,
             'invoice_id' => $item->id,
             'bill_id' => $item->bill_data->id,
             'customer_id' => $item->customer->id
         ];
 
+        $newBill = new stdClass();
+        foreach ($item->bill_data->charges as $charge) {
+            if ($item->bill_data->status == $charge->status) {
+                $newBill->paid_at = $charge->paid_at;
+                $newBill->payment_method = $charge->payment_method->public_name;
+                $newBill->payment_company = $charge->last_transaction->payment_profile->payment_company->name;
+            }
+        }
+
+        $fieldsInvoce['payment_method'] = $newBill->payment_method;
+        $fieldsInvoce['payment_company'] = $newBill->payment_company;
+        $fieldsInvoce['charged_at'] = $newBill->paid_at;
+
         return $fieldsInvoce;
     }
 
-    public function columnIndexToExcelCoordinate($index) {
+    public function columnIndexToExcelCoordinate($index)
+    {
         $dividend = $index + 1;
         $column = '';
 
@@ -129,6 +156,53 @@ class VindiExport {
         }
 
         return $column;
+    }
+
+
+    public function date_s($inputDateTime)
+    {
+        $dateTime = date_create_from_format('Y-m-d\TH:i', $inputDateTime);
+        $formattedDateTime = date_format($dateTime, 'Y-m-d H:i:s');
+
+        return $formattedDateTime;
+    }
+
+    public function import_invoices()
+    {
+        $Invoice = new Vindi\Invoice($this->arguments);
+        $i = 1;
+        $InvoicesRe = [];
+        do {
+            $Invoces = $Invoice->all(['query' => '(issued_at >= "' . $this->date_s($_POST['date_start']) . '" AND issued_at <="' . $this->date_s($_POST['date_end']) . '")', 'per_page' => 50, 'page' => $i]);
+            foreach ($Invoces as $invoce) {
+                $InvoicesRe[] = $invoce;
+            }
+            $i++;
+        } while (count($Invoces) > 0);
+
+        return $InvoicesRe;
+    }
+
+    public function import_bills($billIds)
+    {
+        $Bill = new Vindi\Bill($this->arguments);
+        $i = 1;
+        $BillsRe = [];
+
+        foreach ($billIds as $billId) {
+            $query[] = 'id=' . $billId;
+        }
+        $queryString = implode(' OR ', $query);
+
+        do {
+            $Bills = $Bill->all(['query' => "({$queryString})", 'per_page' => 50, 'page' => $i]);
+            foreach ($Bills as $invoce) {
+                $BillsRe[] = $invoce;
+            }
+            $i++;
+        } while (count($Bills) > 0);
+
+        return $BillsRe;
     }
 
 }
