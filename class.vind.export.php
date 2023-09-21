@@ -139,7 +139,14 @@ class VindiExport
 
         $fieldsInvoce['payment_method'] = $newBill->payment_method;
         $fieldsInvoce['payment_company'] = $newBill->payment_company;
-        $fieldsInvoce['charged_at'] = $newBill->paid_at;
+
+        $issuedDate=new DateTime($fieldsInvoce['charged_at']);
+        $createdDate=new DateTime($fieldsInvoce['charged_at']);
+        $Months = $createdDate->diff($issuedDate);
+        $chargeDaysToAdd = (($Months->y) * 12) + ($Months->m) * 30; // são de 30 em 30 dias que a STONE cobra a próxima parcela de uma fatura
+        $createdDate->modify('+'.$chargeDaysToAdd.' days');
+        $fieldsInvoce['charged_at'] = $createdDate->format('Y-m-d');
+
 
         return $fieldsInvoce;
     }
