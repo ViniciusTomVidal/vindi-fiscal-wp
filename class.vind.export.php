@@ -111,14 +111,17 @@ class VindiExport
 
     public function get_data($item)
     {
+        $item->issued_at = substr($item->issued_at, 0, 10);
+        $item->created_at = substr($item->created_at, 0, 10);
+
         $fieldsInvoce = [
             'name' => $item->customer->name,
             'email' => $item->customer->email,
             'amount' => $item->amount,
             'status' => $item->status,
             'integration_reference' => $item->integration_reference,
-            'created_at' => $item->issued_at,
-            'charged_at' => null,
+            'created_at' => $item->created_at,
+            'charged_at' => $item->charged_at,
             'bill_status' => $item->bill_data->status,
             'payment_method' => null,
             'payment_company' => null,
@@ -127,6 +130,8 @@ class VindiExport
             'bill_id' => $item->bill_data->id,
             'customer_id' => $item->customer->id
         ];
+
+
 
         $newBill = new stdClass();
         foreach ($item->bill_data->charges as $charge) {
@@ -140,8 +145,8 @@ class VindiExport
         $fieldsInvoce['payment_method'] = $newBill->payment_method;
         $fieldsInvoce['payment_company'] = $newBill->payment_company;
 
-        $issuedDate=new DateTime($fieldsInvoce['charged_at']);
-        $createdDate=new DateTime($fieldsInvoce['charged_at']);
+        $issuedDate=new DateTime($item->issued_at);
+        $createdDate=new DateTime($item->created_at);
         $Months = $createdDate->diff($issuedDate);
         $chargeDaysToAdd = (($Months->y) * 12) + ($Months->m) * 30; // são de 30 em 30 dias que a STONE cobra a próxima parcela de uma fatura
         $createdDate->modify('+'.$chargeDaysToAdd.' days');
@@ -193,22 +198,32 @@ class VindiExport
     public function import_bills($billIds)
     {
         $Bill = new Vindi\Bill($this->arguments);
-        $i = 1;
-        $BillsRe = [];
+        $totalIds = count($billIds);
+        $batchSize = 25;
+        $startIndex = 0;
+        $chunks= [];
+        while ($startIndex < $totalIds) {
+            $batch = array_slice($billIds, $startIndex, $batchSize);
 
-        foreach ($billIds as $billId) {
-            $query[] = 'id=' . $billId;
+            // Faça algo com cada lote de IDs
+            $chunks[] = $batch;
+
+            $startIndex += $batchSize;
         }
-        $queryString = implode(' OR ', $query);
 
-        do {
-            $Bills = $Bill->all(['query' => "({$queryString})", 'per_page' => 50, 'page' => $i]);
+        $BillsRe = [];
+        foreach ($chunks as $ids_) {
+            $queryString = '';
+            $query = [];
+            foreach ($ids_ as $billId) {
+                $query[] = 'id=' . $billId;
+            }
+            $queryString = implode(' OR ', $query);
+            $Bills = $Bill->all(['query' => "({$queryString})"]);
             foreach ($Bills as $invoce) {
                 $BillsRe[] = $invoce;
             }
-            $i++;
-        } while (count($Bills) > 0);
-
+        }
         return $BillsRe;
     }
 
